@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>ДУЭЛЬ Онлайн</title>
+<style>
+body { font-family: Arial; text-align:center; background:#111; color:#fff; }
+button { margin:5px; padding:10px 15px; font-size:16px }
+.card { margin:5px; padding:5px 10px; background:#222; border:1px solid #555; display:inline-block; cursor:pointer; }
+#characters button { display:block; margin:5px auto; }
+</style>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+import { getDatabase, ref, set, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+
+// 🔑 Вставь сюда свой firebaseConfig
+const firebaseConfig = {
+  apiKey: "AIzaSyDCgM4sN_T9L4lY1wTvYi77EO7Y6TSqlLM",
+  authDomain: "duel-game3000.firebaseapp.com",
+  databaseURL: "https://duel-game3000-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "duel-game3000",
+  storageBucket: "duel-game3000.firebasestorage.app",
+  messagingSenderId: "67441126972",
+  appId: "1:67441126972:web:8ba68cb5a5177958d49d39",
+  measurementId: "G-PL8K3Z424E"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const urlParams = new URLSearchParams(window.location.search);
+let roomId = urlParams.get("room");
+if (!roomId) {
+  roomId = Math.random().toString(36).substring(2,7);
+  window.location.search = "?room=" + roomId;
+}
+
+const roomRef = ref(db, "rooms/" + roomId);
+let currentPlayer = localStorage.getItem(roomId);
+let myCharacter = null;
+let lastAction = null;
+
+// Персонажи
+const characters = {
+  "Воин": {hp:20, attack:5, ability:"Двойная атака (+2)"},
+  "Маг": {hp:18, attack:4, ability:"Магический удар (-10, 1 раз)"},
+  "Танк": {hp:25, attack:3, ability:"Защита (-1 урон каждый ход)"},
+  "Ассасин": {hp:18, attack:4, ability:"Крит на кубике (5-6 = -8)"},
+  "Лекарь": {hp:20, attack:3, ability:"Лечение +4 HP"}
+};
+
+// Карты
+const cardsList = ["⚔ Удар","🛡 Защита","❤️ Лечение"];
+let hand = [];
+
+function drawCards() {
+  hand = [];
+  for (let i=0; i<3; i++) hand.push(cardsList[Math.floor(Math.random()*cardsList.length)]);
+  renderHand();
+}
+
+function renderHand() {
+  const div = document.getElementById("hand");
+  div.innerHTML = "<h3>Твоя рука:</h3>";
+  hand.forEach((c,i) => {
+    const btn = document.createElement("button");
+    btn.className = "card";
+    btn.innerText = c;
+    btn.onclick = () => playCard(i);
+    div.appendChild(btn);
+  });
+}
+
+function playCard(index) {
+  const card = hand[index];
+  runTransaction(roomRef, d => {
+    if (!d || d.turn !== currentPlayer || !myCharacter) { alert("Не твой ход!"); return; }
+
+    if (card==="⚔ Удар") lastAction = "card⚔ Удар";
+    if (card==="🛡 Защита") {
+      if (currentPlayer===1) d.block1=2; else d.block2=2;
+    }
+    if (card==="❤️ Лечение" && myCharacter==="Лекарь") {
+      if (currentPlayer===1) d.hp1 += 4; else d.hp2 +=4;
+    }
+
+    d.turn = currentPlayer===1 ? 2 : 1;
+    return d;
+  });
+  hand.splice(index,1);
+  renderHand();
+}
+
+// Атака
+window.attack = function() {
+  runTransaction(roomRef, d => {
+    if (!d || d.turn !== currentPlayer || !myCharacter) { alert("Не твой ход!"); return; }
+    let damage = characters[myCharacter].attack;
+    if (lastAction==="card⚔ Удар") damage += 2;
+    if (currentPlayer===1) d.hp2 -= damage; else d.hp1 -= damage;
+    d.turn = currentPlayer===1 ? 2 : 1;
+    lastAction = "attack";
+    drawCards(); // новые карты на следующий ход
+    return d;
+  });
+}
+
+// Инициализация комнаты и присвоение игрока
+onValue(roomRef, snapshot => {
+  const data = snapshot.val();
+  if (!snapshot.exists()) {
+    set(roomRef, {players:0, turn:1, hp1:0, hp2:0, char1:"", char2:"", block1:0, block2:0});
+  } else {
+    if (!currentPlayer) {
+      if (data.players===0) currentPlayer=1; else if (data.players===1) currentPlayer=2;
+      localStorage.setItem(roomId,currentPlayer);
+      runTransaction(roomRef,d=>{d.players=(d.players||0)+1; return d;});
+    }
+    updateUI(data);
+  }
+});
+
+function updateUI(data) {
+  document.getElementById("turn").innerText = "Ход игрока " + data.turn + " | Ты: Игрок " + currentPlayer;
+  document.getElementById("hp1").innerText = data.hp1 + " ("+data.char1+")";
+  document.getElementById("hp2").innerText = data.hp2 + " ("+data.char2+")";
+
+  if (!myCharacter) showCharacterSelection();
+}
+
+function showCharacterSelection() {
+  const div = document.getElementById("characters");
+  div.style.display="block";
+  div.innerHTML = "<h3>Выберите персонажа</h3>";
+  for (let name in characters) {
+    const btn = document.createElement("button");
+    btn.innerText = name + " | " + characters[name].ability;
+    btn.onclick = () => selectCharacter(name);
+    div.appendChild(btn);
+  }
+}
+
+function selectCharacter(name) {
+  myCharacter = name;
+  runTransaction(roomRef,d=>{
+    if (currentPlayer===1){ d.hp1=characters[name].hp; d.char1=name; }
+    else { d.hp2=characters[name].hp; d.char2=name; }
+    return d;
+  });
+  document.getElementById("characters").style.display="none";
+  drawCards();
+}
+</script>
+</head>
+<body>
+<h1>ДУЭЛЬ Онлайн</h1>
+<h2 id="room"></h2>
+<h3 id="turn"></h3>
+
+<div id="characters"></div>
+<div id="hand"></div>
+
+<button onclick="attack()">⚔ Атака</button>
+<button onclick="heal()">❤️ Лечение</button>
+
+<p>HP1: <span id="hp1">0</span></p>
+<p>HP2: <span id="hp2">0</span></p>
+
+<script>
+document.getElementById("room").innerText = "Комната: " + new URLSearchParams(window.location.search).get("room");
+</script>
+</body>
+</html>
